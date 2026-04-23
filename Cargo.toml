@@ -1,0 +1,68 @@
+[workspace]
+members = [
+  "examples/cu_elrs_bdshot_demo",
+  "examples/cu_feetech_demo",
+  "examples/cu_flight_controller",
+  "examples/cu_gnss_ublox_demo",
+  "examples/cu_human_pose",
+  "examples/cu_rp_balancebot",
+]
+default-members = [
+  "examples/cu_feetech_demo",
+  "examples/cu_flight_controller",
+  "examples/cu_gnss_ublox_demo",
+  "examples/cu_human_pose",
+  "examples/cu_rp_balancebot",
+]
+resolver = "2"
+
+[workspace.package]
+version = "0.15.0"
+authors = ["Guillaume Binet <gbin@gootz.net>"]
+edition = "2024"
+rust-version = "1.95"
+license = "Apache-2.0"
+keywords = ["robotics", "middleware", "copper", "real-time"]
+categories = ["science::robotics"]
+homepage = "https://github.com/copper-project"
+repository = "https://github.com/copper-project/extra-examples"
+
+[workspace.dependencies]
+# Shared third-party dependencies copied from copper-rs.
+bincode = { package = "cu-bincode", version = "2.0", default-features = false, features = [
+  "derive",
+  "alloc",
+] }
+serde = { version = "1.0", default-features = false, features = [
+  "derive",
+  "alloc",
+] }
+avian3d = { version = "0.6.1", default-features = false }
+bevy = { version = "0.18.0", default-features = false }
+buddy_system_allocator = { version = "0.13", default-features = false }
+cached-path = { version = "0.10.0", default-features = false }
+cortex-m = "0.7"
+cortex-m-rt = "0.7"
+ctrlc = "3.5"
+defmt = { version = "1.0", default-features = false }
+defmt-rtt = "1.1"
+embedded-alloc = { version = "0.7", default-features = false }
+image = { version = "0.25.6", default-features = false }
+panic-probe = "1.0"
+rerun = { version = "0.31", default-features = false, features = [
+  "sdk",
+  "server",
+  "log",
+] }
+rp235x-hal = "0.4"
+spin = { version = "0.10" }
+stm32h7xx-hal = { version = "0.16.0", default-features = false }
+tempfile = { version = "3.23", default-features = false }
+
+[profile.screaming]
+inherits = "release"
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+debug = false
