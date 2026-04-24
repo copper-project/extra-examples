@@ -14,6 +14,21 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  fmt:
+    name: Format Check
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+
   host:
     name: Host Example Checks
     runs-on: ubuntu-latest
@@ -39,6 +54,12 @@ jobs:
           cargo check -p cu-human-pose --all-targets
           cargo check -p cu-feetech-demo --all-targets
           cargo check -p cu-gnss-ublox-demo --all-targets --features logexport
+
+      - name: Run host tests
+        run: |
+          cargo test -p cu-human-pose
+          cargo test -p cu-flight-controller --bin quad-sim --features textlogs
+          cargo test -p cu-rp-balancebot --bin balancebot-sim
 
   embedded:
     name: Embedded Example Checks

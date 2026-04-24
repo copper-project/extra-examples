@@ -39,13 +39,17 @@ repository dispatch event.
 ## Checks
 
 ```bash
-just check
+just pr-check
 ```
 
-The host checks cover the Linux-targeted apps. `cu-human-pose` needs GStreamer
-development packages installed locally. The embedded smoke checks use
-cross-target `cargo check` against the same RP2350 and STM32H7 targets exercised
-by these demos.
+`just pr-check` runs formatting verification, the existing host/embedded compile
+smoke checks, and the host-side unit tests that are stable in CI.
+
+`just check` remains available when you only want the compile-smoke pass. The
+host checks cover the Linux-targeted apps. `cu-human-pose` needs GStreamer
+development packages installed locally. The embedded smoke checks use cross-target
+`cargo check` against the same RP2350 and STM32H7 targets exercised by these
+demos.
 
 ## License
 
