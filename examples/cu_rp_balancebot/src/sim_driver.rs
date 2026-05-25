@@ -279,7 +279,6 @@ pub fn run_copper_callback(
     };
     if let Err(err) = copper_ctx.copper_app.run_one_iteration(&mut sim_callback) {
         error!("Simulation stopped: {err}");
-        eprintln!("Simulation stopped: {err}");
         exit_writer.write(AppExit::Success);
     }
 }
