@@ -106,7 +106,6 @@ impl CuTask for GstToCuImage {
         self.last_payload_ns = Some(now_ns);
 
         let mapped = buffer
-            .as_ref()
             .map_readable()
             .map_err(|e| CuError::new_with_cause("Failed to map GStreamer buffer", e))?;
         let src = mapped.as_slice();
