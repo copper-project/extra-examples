@@ -215,7 +215,6 @@ fn run_one_shot(log_base: &Path, replay_log_base: &Path) -> CuResult<()> {
             run_one_copperlist(&mut copper_app, &mut robot_clock_mock, entry, pending_kf_ts)
         {
             error!("Simulation replay stopped: {err}");
-            eprintln!("Simulation replay stopped: {err}");
             break;
         }
     }
