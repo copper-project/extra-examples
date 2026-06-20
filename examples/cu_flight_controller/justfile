@@ -16,11 +16,17 @@ dag mission="":
   fi
 
   cd "{{ROOT}}"
+  copper_root="${COPPER_ROOT:-{{ROOT}}/../copper-rs}"
+  if [[ ! -f "${copper_root}/Cargo.toml" ]]; then
+    echo "cu29-runtime is not in this workspace and COPPER_ROOT does not point to copper-rs" >&2
+    echo "Set COPPER_ROOT to a copper-rs checkout containing cu29-runtime." >&2
+    exit 1
+  fi
   mission_value="{{mission}}"
   if [[ -n "$mission_value" ]]; then
-    cargo run -p cu29-runtime --bin cu29-rendercfg -- --mission "$mission_value" --open "$cfg_path"
+    cargo run --manifest-path "${copper_root}/Cargo.toml" -p cu29-runtime --bin cu29-rendercfg -- --mission "$mission_value" --open "$cfg_path"
   else
-    cargo run -p cu29-runtime --bin cu29-rendercfg -- --open "$cfg_path"
+    cargo run --manifest-path "${copper_root}/Cargo.toml" -p cu29-runtime --bin cu29-rendercfg -- --open "$cfg_path"
   fi
 
 # A quick test to see if the sim can pick up your RC.

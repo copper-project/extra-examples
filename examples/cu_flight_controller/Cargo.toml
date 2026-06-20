@@ -62,7 +62,7 @@ libm = { version = "0.2", default-features = false }
 
 ## Log reader depencies
 cu29-export = { git = "https://github.com/copper-project/copper-rs.git", branch = "master", optional = true }
-pyo3 = { version = "0.28", optional = true, default-features = false, features = [
+pyo3 = { version = "0.29", optional = true, default-features = false, features = [
   "extension-module",
   "macros",
 ] }
