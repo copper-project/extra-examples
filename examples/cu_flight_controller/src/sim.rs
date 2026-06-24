@@ -58,7 +58,7 @@ use cu_sensor_payloads::{BarometerPayload, ImuPayload, MagnetometerPayload};
 #[cfg(not(target_arch = "wasm32"))]
 use std::fs;
 #[cfg(not(target_arch = "wasm32"))]
-use std::io;
+use std::io::{self, Write};
 #[cfg(not(target_arch = "wasm32"))]
 use std::path::{Path, PathBuf};
 use std::sync::atomic::Ordering;
@@ -94,6 +94,14 @@ struct CopperState {
     clock: RobotClock,
     clock_mock: RobotClockMock,
     app: gnss::FlightControllerSim,
+}
+
+#[derive(Clone, Resource)]
+struct SceneAssetPaths {
+    quadcopter: String,
+    city: String,
+    skybox: String,
+    specular_map: String,
 }
 
 #[derive(Resource, Default, Clone)]
@@ -397,6 +405,9 @@ const SKYBOX: &str = "skybox.ktx2";
 const SPECULAR_MAP: &str = "specular_map.ktx2";
 const QUADCOPTER: &str = "quadcopter.glb";
 const CITY: &str = "city-fixed.glb";
+const SCENE_ASSETS: [&str; 4] = [QUADCOPTER, CITY, SKYBOX, SPECULAR_MAP];
+#[cfg(not(target_arch = "wasm32"))]
+const SCENE_ASSET_CACHE_DIR: &str = ".download-cache";
 // Measured from `gltf-transform inspect city.glb` in source model units.
 const LOCAL_CITY_BBOX_MIN_UNITS: Vec3 = Vec3::new(-30_614.165, -648.2196, -4_185.883);
 const LOCAL_CITY_BBOX_MAX_UNITS: Vec3 = Vec3::new(18_754.953, 11_102.407, 35_871.875);
@@ -442,21 +453,62 @@ fn spawn_pose_components() -> (
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-fn create_symlink(src: &str, dst: &str) -> io::Result<()> {
-    let dst_path = Path::new(dst);
+fn scene_asset_root() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("assets")
+}
 
-    if dst_path.exists() {
-        fs::remove_file(dst_path)?;
+#[cfg(not(target_arch = "wasm32"))]
+fn scene_asset_cache_root() -> PathBuf {
+    scene_asset_root().join(SCENE_ASSET_CACHE_DIR)
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn path_string(path: &Path) -> String {
+    path.to_string_lossy().into_owned()
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn asset_progress_bar(done: usize, total: usize) -> String {
+    const WIDTH: usize = 28;
+    let filled = WIDTH * done / total.max(1);
+    let empty = WIDTH.saturating_sub(filled);
+    format!(
+        "[{}{}] {done}/{total}",
+        "=".repeat(filled),
+        " ".repeat(empty)
+    )
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn link_or_copy_cached_asset(src: &Path, dst: &Path) -> io::Result<()> {
+    if fs::symlink_metadata(dst).is_ok() {
+        fs::remove_file(dst)?;
     }
 
     #[cfg(unix)]
     {
-        std::os::unix::fs::symlink(src, dst)
+        match std::os::unix::fs::symlink(src, dst) {
+            Ok(()) => Ok(()),
+            Err(symlink_err) => fs::copy(src, dst).map(|_| ()).map_err(|copy_err| {
+                io::Error::new(
+                    copy_err.kind(),
+                    format!("failed to symlink ({symlink_err}) or copy ({copy_err})"),
+                )
+            }),
+        }
     }
 
     #[cfg(windows)]
     {
-        std::os::windows::fs::symlink_file(src, dst)
+        match std::os::windows::fs::symlink_file(src, dst) {
+            Ok(()) => Ok(()),
+            Err(symlink_err) => fs::copy(src, dst).map(|_| ()).map_err(|copy_err| {
+                io::Error::new(
+                    copy_err.kind(),
+                    format!("failed to symlink ({symlink_err}) or copy ({copy_err})"),
+                )
+            }),
+        }
     }
 }
 
@@ -467,18 +519,15 @@ fn get_asset_path(
     asset_url: &str,
     asset_name: &str,
 ) -> Result<PathBuf, CacheError> {
-    match online_cache.cached_path(asset_url) {
+    match offline_cache.cached_path(asset_url) {
         Ok(path) => Ok(path),
         Err(err) => {
             if matches!(
                 err,
-                CacheError::HttpError(_) | CacheError::IoError(_) | CacheError::ResourceNotFound(_)
+                CacheError::NoCachedVersions(_) | CacheError::CacheCorrupted(_)
             ) {
-                eprintln!(
-                    "Failed to fetch latest '{}' from network ({}). Attempting to use cached version.",
-                    asset_name, err
-                );
-                offline_cache.cached_path(asset_url)
+                eprintln!("  {asset_name}: cache miss; downloading from {asset_url}");
+                online_cache.cached_path(asset_url)
             } else {
                 Err(err)
             }
@@ -490,14 +539,92 @@ fn get_asset_path(
 fn precached_asset_path(
     online_cache: &Cache,
     offline_cache: &Cache,
+    asset_root: &Path,
+    index: usize,
+    total: usize,
     asset_name: &str,
-) -> Result<PathBuf, CacheError> {
+) -> Result<String, CacheError> {
+    let plain_path = asset_root.join(asset_name);
+    if plain_path.is_file() {
+        eprintln!(
+            "  {} {asset_name}: cached",
+            asset_progress_bar(index, total)
+        );
+        return Ok(path_string(&plain_path));
+    }
+
+    if fs::symlink_metadata(&plain_path).is_ok() {
+        fs::remove_file(&plain_path)?;
+    }
+
+    eprintln!(
+        "  {} {asset_name}: resolving",
+        asset_progress_bar(index.saturating_sub(1), total)
+    );
     let asset_url = format!("{BASE_ASSETS_URL}{asset_name}");
     let hashed_path = get_asset_path(online_cache, offline_cache, &asset_url, asset_name)?;
-    let plain_path = hashed_path.parent().unwrap().join(asset_name);
-    create_symlink(hashed_path.to_str().unwrap(), plain_path.to_str().unwrap())
-        .expect("failed to create cached-asset symlink");
-    Ok(plain_path)
+    link_or_copy_cached_asset(&hashed_path, &plain_path)?;
+    eprintln!("  {} {asset_name}: ready", asset_progress_bar(index, total));
+    Ok(path_string(&plain_path))
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn prepare_scene_assets() -> SceneAssetPaths {
+    let asset_root = scene_asset_root();
+    let cache_root = scene_asset_cache_root();
+    fs::create_dir_all(&asset_root).expect("failed to create scene asset directory");
+
+    eprintln!(
+        "Preparing Copper flight-controller scene assets in {}",
+        asset_root.display()
+    );
+    let _ = io::stderr().flush();
+
+    let online_cache = Cache::builder()
+        .dir(cache_root.clone())
+        .progress_bar(Some(ProgressBar::Full))
+        .build()
+        .expect("failed to create online scene asset cache");
+    let offline_cache = Cache::builder()
+        .dir(cache_root)
+        .offline(true)
+        .progress_bar(None)
+        .build()
+        .expect("failed to create offline scene asset cache");
+
+    let total = SCENE_ASSETS.len();
+    let mut paths = Vec::with_capacity(total);
+    for (i, asset_name) in SCENE_ASSETS.iter().enumerate() {
+        paths.push(
+            precached_asset_path(
+                &online_cache,
+                &offline_cache,
+                &asset_root,
+                i + 1,
+                total,
+                asset_name,
+            )
+            .unwrap_or_else(|err| panic!("failed to prepare {asset_name}: {err}")),
+        );
+    }
+
+    eprintln!("Scene assets ready.");
+    SceneAssetPaths {
+        quadcopter: paths[0].clone(),
+        city: paths[1].clone(),
+        skybox: paths[2].clone(),
+        specular_map: paths[3].clone(),
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+fn prepare_scene_assets() -> SceneAssetPaths {
+    SceneAssetPaths {
+        quadcopter: QUADCOPTER.to_string(),
+        city: CITY.to_string(),
+        skybox: SKYBOX.to_string(),
+        specular_map: SPECULAR_MAP.to_string(),
+    }
 }
 
 fn propeller_from_position(x: f32, y: f32, z: f32, direction: RotationDirection) -> PropellerInfo {
@@ -696,52 +823,15 @@ fn setup_world(
     asset_server: Res<AssetServer>,
     mut images: ResMut<Assets<Image>>,
     layout: Res<WorldLayout>,
+    asset_paths: Res<SceneAssetPaths>,
 ) {
-    #[cfg(not(target_arch = "wasm32"))]
-    let online_cache = Cache::builder()
-        .progress_bar(Some(ProgressBar::Full))
-        .build()
-        .expect("failed to create online file cache");
-
-    #[cfg(not(target_arch = "wasm32"))]
-    let offline_cache = Cache::builder()
-        .progress_bar(Some(ProgressBar::Full))
-        .offline(true)
-        .build()
-        .expect("failed to create offline file cache");
-
-    #[cfg(not(target_arch = "wasm32"))]
-    let quadcopter_path = precached_asset_path(&online_cache, &offline_cache, QUADCOPTER)
-        .expect("failed to get quadcopter.glb (online or cached)");
-    #[cfg(not(target_arch = "wasm32"))]
-    let skybox_path = precached_asset_path(&online_cache, &offline_cache, SKYBOX)
-        .expect("failed to get skybox.ktx2 (online or cached)");
-    #[cfg(not(target_arch = "wasm32"))]
-    let specular_map_path = precached_asset_path(&online_cache, &offline_cache, SPECULAR_MAP)
-        .expect("failed to get specular_map.ktx2 (online or cached)");
-    #[cfg(not(target_arch = "wasm32"))]
-    let city_path = precached_asset_path(&online_cache, &offline_cache, CITY)
-        .expect("failed to get city.glb (online or cached)");
-    #[cfg(target_arch = "wasm32")]
-    let quadcopter_path = QUADCOPTER;
-    #[cfg(target_arch = "wasm32")]
-    let skybox_path = SKYBOX;
-    #[cfg(target_arch = "wasm32")]
-    let specular_map_path = SPECULAR_MAP;
-    #[cfg(target_arch = "wasm32")]
-    let city_path = CITY;
-
     let city_size_units = LOCAL_CITY_BBOX_MAX_UNITS - LOCAL_CITY_BBOX_MIN_UNITS;
     let city_size_m = city_size_units * LOCAL_CITY_SCALE;
     let city_translation = Vec3::ZERO;
     let city_scale = Vec3::splat(LOCAL_CITY_SCALE);
-    #[cfg(not(target_arch = "wasm32"))]
-    let city_path_str = city_path.to_string_lossy().into_owned();
-    #[cfg(target_arch = "wasm32")]
-    let city_path_str = city_path.to_string();
     info!(
         "sim world: loading city {} (bbox {}x{}x{} units, scaled to {}x{}x{} m) with translation ({}, {}, {})",
-        city_path_str,
+        asset_paths.city.as_str(),
         city_size_units.x,
         city_size_units.y,
         city_size_units.z,
@@ -753,8 +843,8 @@ fn setup_world(
         city_translation.z
     );
 
-    let skybox_handle = asset_server.load(skybox_path);
-    let specular_map_handle = asset_server.load(specular_map_path);
+    let skybox_handle = asset_server.load(asset_paths.skybox.clone());
+    let specular_map_handle = asset_server.load(asset_paths.specular_map.clone());
 
     commands.insert_resource(GlobalAmbientLight {
         color: Color::WHITE,
@@ -821,14 +911,8 @@ fn setup_world(
         Transform::from_translation(Vec3::new(3.0, 10.0, 1.0)).looking_at(Vec3::ZERO, Vec3::Y),
     ));
 
-    #[cfg(not(target_arch = "wasm32"))]
-    let quadcopter_scene_path = format!("{}#scene0", quadcopter_path.display());
-    #[cfg(target_arch = "wasm32")]
-    let quadcopter_scene_path = format!("{quadcopter_path}#scene0");
-    #[cfg(not(target_arch = "wasm32"))]
-    let city_scene_path = format!("{}#scene0", city_path.display());
-    #[cfg(target_arch = "wasm32")]
-    let city_scene_path = format!("{city_path}#scene0");
+    let quadcopter_scene_path = format!("{}#scene0", asset_paths.quadcopter.as_str());
+    let city_scene_path = format!("{}#scene0", asset_paths.city.as_str());
 
     let quadcopter_scene =
         asset_server.load(GltfAssetLabel::Scene(0).from_asset(quadcopter_scene_path));
@@ -2104,6 +2188,14 @@ fn sync_loading_overlay(
 }
 
 pub fn build_world(headless: bool, split_monitor: bool) -> App {
+    build_world_with_assets(headless, split_monitor, None)
+}
+
+fn build_world_with_assets(
+    headless: bool,
+    split_monitor: bool,
+    scene_assets: Option<SceneAssetPaths>,
+) -> App {
     let mut app = App::new();
     app.insert_resource(SimState::default())
         .insert_resource(SimMotorCommands::default())
@@ -2117,6 +2209,10 @@ pub fn build_world(headless: bool, split_monitor: bool) -> App {
         .insert_resource(WorldLayout { split_monitor })
         .init_resource::<SceneLoadState>()
         .init_resource::<SimHudSpawnState>();
+
+    if !headless {
+        app.insert_resource(scene_assets.unwrap_or_else(prepare_scene_assets));
+    }
 
     if headless {
         app.add_plugins(MinimalPlugins);
@@ -2181,7 +2277,8 @@ pub fn build_world(headless: bool, split_monitor: bool) -> App {
 
 #[cfg(feature = "sim")]
 pub fn run_sim() {
-    let mut app = build_world(false, false);
+    let scene_assets = prepare_scene_assets();
+    let mut app = build_world_with_assets(false, false, Some(scene_assets));
     #[cfg(not(target_arch = "wasm32"))]
     {
         app.add_systems(Startup, setup_copper);
@@ -2198,9 +2295,10 @@ pub fn run_sim() {
 
 #[cfg(feature = "bevymon")]
 pub fn run_bevymon() {
+    let scene_assets = prepare_scene_assets();
     let (monitor_model, copper) = build_bevymon_copper();
 
-    let mut app = build_world(false, true);
+    let mut app = build_world_with_assets(false, true, Some(scene_assets));
     app.insert_resource(copper)
         .init_resource::<LayoutSpawned>()
         .add_plugins(
