@@ -55,8 +55,6 @@ rerun = { version = "0.31", default-features = false, features = [
   "log",
 ] }
 rp235x-hal = "0.4"
-# Follow copper-rs master across its spin 0.10 -> 0.12 transition without
-# forcing this workspace to instantiate a separate app-level Mutex type.
 spin = { version = ">=0.10, <0.13" }
 stm32h7xx-hal = { version = "0.16.0", default-features = false }
 tempfile = { version = "3.23", default-features = false }
