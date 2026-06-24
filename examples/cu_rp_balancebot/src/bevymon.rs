@@ -13,9 +13,9 @@ use bevy::asset::UnapprovedPathMode;
 use bevy::camera::ClearColorConfig;
 use bevy::prelude::{
     App, AssetPlugin, BackgroundColor, BorderColor, Camera, Camera2d, ClearColor, Color, Commands,
-    Component, DefaultPlugins, Entity, FixedUpdate, Pickable, PluginGroup, PostUpdate, Query, Res,
-    ResMut, Resource, Startup, Text, TextColor, TextFont, Update, Val, Visibility, Window,
-    WindowPlugin, With, default,
+    Component, DefaultPlugins, Entity, FixedUpdate, FontSize, Pickable, PluginGroup, PostUpdate,
+    Query, Res, ResMut, Resource, Startup, Text, TextColor, TextFont, Update, Val, Visibility,
+    Window, WindowPlugin, With, default,
 };
 use bevy::render::RenderPlugin;
 use bevy::ui::{Node as UiNode, PositionType, UiRect};
@@ -224,7 +224,7 @@ fn spawn_balancebot_layout(
                             Pickable::IGNORE,
                             Text::new("Assets loading..."),
                             TextFont {
-                                font_size: 18.0,
+                                font_size: FontSize::Px(18.0),
                                 ..default()
                             },
                             TextColor(Color::srgb(0.93, 0.96, 1.0)),
@@ -260,7 +260,7 @@ fn spawn_balancebot_layout(
                     Pickable::IGNORE,
                     Text::new("Move\nNavigation\nInteract\nZoom\nPause/Resume\nReset\nShow Forces"),
                     TextFont {
-                        font_size: 12.0,
+                        font_size: FontSize::Px(12.0),
                         ..default()
                     },
                     TextColor(Color::srgba(0.25, 0.25, 0.75, 1.0)),
@@ -269,7 +269,7 @@ fn spawn_balancebot_layout(
                     Pickable::IGNORE,
                     Text::new(instructions),
                     TextFont {
-                        font_size: 12.0,
+                        font_size: FontSize::Px(12.0),
                         ..default()
                     },
                     TextColor(Color::WHITE),

@@ -10,8 +10,7 @@ struct BalanceBotSim {}
 use bevy::asset::{AssetApp, UnapprovedPathMode};
 use bevy::prelude::{
     App, AssetPlugin, DefaultPlugins, FixedUpdate, Font, ImagePlugin, Mesh, MinimalPlugins,
-    PluginGroup, PostUpdate, SceneSpawner, StandardMaterial, Startup, Update, Window, WindowPlugin,
-    default,
+    PluginGroup, PostUpdate, StandardMaterial, Startup, Update, Window, WindowPlugin, default,
 };
 use bevy::render::RenderPlugin;
 use bevy::scene::ScenePlugin;
@@ -46,7 +45,6 @@ pub fn make_world(headless: bool) -> App {
         app.init_asset::<Mesh>();
         app.init_asset::<StandardMaterial>();
         app.init_asset::<Font>();
-        app.init_resource::<SceneSpawner>();
     } else {
         app.add_plugins(
             DefaultPlugins
