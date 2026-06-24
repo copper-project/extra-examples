@@ -723,8 +723,15 @@ type BevyMonUnifiedLogger = UnifiedLoggerWrite;
 fn setup_copper(mut commands: Commands) {
     #[allow(clippy::identity_op)]
     const LOG_SLAB_SIZE: Option<usize> = Some(128 * 1024 * 1024);
-    let logger_path = "logs/flight_controller_sim.copper";
-    if let Some(parent) = Path::new(logger_path).parent()
+    commands.insert_resource(build_sim_copper_state(
+        Path::new("logs/flight_controller_sim.copper"),
+        LOG_SLAB_SIZE,
+    ));
+}
+
+#[cfg(all(not(target_arch = "wasm32"), feature = "sim"))]
+fn build_sim_copper_state(logger_path: &Path, log_slab_size: Option<usize>) -> CopperState {
+    if let Some(parent) = logger_path.parent()
         && !parent.exists()
     {
         fs::create_dir_all(parent).expect("failed to create logs directory");
@@ -733,7 +740,7 @@ fn setup_copper(mut commands: Commands) {
     let (clock, clock_mock) = RobotClock::mock();
     let mut app = gnss::FlightControllerSim::builder()
         .with_clock(clock.clone())
-        .with_log_path(PathBuf::from(logger_path), LOG_SLAB_SIZE)
+        .with_log_path(PathBuf::from(logger_path), log_slab_size)
         .expect("failed to create logger")
         .with_sim_callback(&mut default_callback)
         .build()
@@ -742,11 +749,11 @@ fn setup_copper(mut commands: Commands) {
     app.start_all_tasks(&mut default_callback)
         .expect("failed to start tasks");
 
-    commands.insert_resource(CopperState {
+    CopperState {
         clock,
         clock_mock,
         app,
-    });
+    }
 }
 
 #[cfg(feature = "bevymon")]
@@ -1506,11 +1513,29 @@ fn run_copper(
     mut osd_overlay: ResMut<SimOsdOverlay>,
     mut exit_writer: MessageWriter<AppExit>,
 ) {
-    copper
-        .clock_mock
-        .set_value(physics_time.elapsed().as_nanos() as u64);
-    let vehicle = sim_state.vehicle.clone();
-    let rc = rc_input.clone();
+    let elapsed_ns = physics_time.elapsed().as_nanos() as u64;
+    if let Err(err) = run_copper_iteration(
+        &mut copper,
+        elapsed_ns,
+        sim_state.vehicle.clone(),
+        rc_input.clone(),
+        &mut motor_commands,
+        &mut osd_overlay,
+    ) {
+        error!("sim loop stopped: {}", err);
+        exit_writer.write(AppExit::Success);
+    }
+}
+
+fn run_copper_iteration(
+    copper: &mut CopperState,
+    elapsed_ns: u64,
+    vehicle: SimVehicleState,
+    rc: SimRcInput,
+    motor_commands: &mut SimMotorCommands,
+    osd_overlay: &mut SimOsdOverlay,
+) -> CuResult<()> {
+    copper.clock_mock.set_value(elapsed_ns);
     sim_battery_set_armed(rc.armed);
     sim_battery_set_throttle(rc.throttle);
     sim_gnss_set_vehicle_state(
@@ -1596,10 +1621,7 @@ fn run_copper(
         }
     };
 
-    if let Err(err) = copper.app.run_one_iteration(&mut sim_callback) {
-        error!("sim loop stopped: {}", err);
-        exit_writer.write(AppExit::Success);
-    }
+    copper.app.run_one_iteration(&mut sim_callback)
 }
 
 fn apply_multicopter_dynamics(
@@ -2047,6 +2069,7 @@ fn register_scene_reflect_types(app: &mut App) {
     app.register_type::<bevy::prelude::Handle<bevy::prelude::WorldAsset>>();
     app.register_type::<bevy::gltf::GltfExtras>();
     app.register_type::<bevy::gltf::GltfSceneExtras>();
+    app.register_type::<bevy::gltf::GltfSceneName>();
     app.register_type::<bevy::gltf::GltfMeshExtras>();
     app.register_type::<bevy::gltf::GltfMeshName>();
     app.register_type::<bevy::gltf::GltfMaterialExtras>();
@@ -2351,10 +2374,155 @@ mod tests {
         );
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
+    fn build_test_copper_state() -> CopperState {
+        let (clock, clock_mock) = RobotClock::mock();
+        let mut sim_callback = default_callback;
+        let mut app = gnss::FlightControllerSim::builder()
+            .with_clock(clock.clone())
+            .with_sim_callback(&mut sim_callback)
+            .build()
+            .expect("failed to create runtime");
+
+        app.start_all_tasks(&mut sim_callback)
+            .expect("failed to start tasks");
+
+        CopperState {
+            clock,
+            clock_mock,
+            app,
+        }
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn build_scene_asset_test_app(register_reflect_types: bool) -> App {
+        let mut app = App::new();
+        app.add_plugins((
+            MinimalPlugins,
+            asset_plugin(),
+            bevy::world_serialization::WorldSerializationPlugin,
+            bevy::image::ImagePlugin::default(),
+            bevy::mesh::MeshPlugin,
+            bevy::pbr::MaterialPlugin::<bevy::prelude::StandardMaterial>::default(),
+            bevy::gltf::GltfPlugin::default(),
+        ));
+        app.insert_resource(bevy::image::CompressedImageFormatSupport(
+            bevy::image::CompressedImageFormats::NONE,
+        ));
+        if register_reflect_types {
+            register_scene_reflect_types(&mut app);
+        }
+        app.finish();
+        app
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn load_scene_asset_handles(
+        app: &mut App,
+        scene_assets: &SceneAssetPaths,
+    ) -> (Handle<WorldAsset>, Handle<WorldAsset>) {
+        let asset_server = app.world().resource::<AssetServer>();
+        (
+            asset_server.load(GltfAssetLabel::Scene(0).from_asset(scene_assets.quadcopter.clone())),
+            asset_server.load(GltfAssetLabel::Scene(0).from_asset(scene_assets.city.clone())),
+        )
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn wait_for_scene_asset_loads(
+        app: &mut App,
+        quadcopter_scene: &Handle<WorldAsset>,
+        city_scene: &Handle<WorldAsset>,
+    ) -> bool {
+        for _ in 0..300 {
+            app.update();
+            let asset_server = app.world().resource::<AssetServer>();
+            if asset_server.is_loaded_with_dependencies(quadcopter_scene.id())
+                && asset_server.is_loaded_with_dependencies(city_scene.id())
+            {
+                return true;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        false
+    }
+
     #[test]
     fn sim_world_starts() {
         let mut app = build_world(true, false);
         app.update();
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn sim_copper_runs_one_iteration() {
+        let mut copper = build_test_copper_state();
+        let mut motors = SimMotorCommands::default();
+        let mut osd_overlay = SimOsdOverlay::default();
+
+        run_copper_iteration(
+            &mut copper,
+            0,
+            SimVehicleState::default(),
+            SimRcInput::default(),
+            &mut motors,
+            &mut osd_overlay,
+        )
+        .expect("copper sim iteration should keep running");
+
+        copper
+            .app
+            .stop_all_tasks(&mut default_callback)
+            .expect("failed to stop tasks");
+        copper
+            .app
+            .log_shutdown_completed()
+            .expect("failed to log shutdown");
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn sim_gltf_world_assets_load() {
+        let scene_assets = prepare_scene_assets();
+        let mut app = build_scene_asset_test_app(false);
+        let (quadcopter_scene, city_scene) = load_scene_asset_handles(&mut app, &scene_assets);
+
+        if wait_for_scene_asset_loads(&mut app, &quadcopter_scene, &city_scene) {
+            return;
+        }
+
+        let asset_server = app.world().resource::<AssetServer>();
+        panic!(
+            "scene assets did not load: quadcopter_loaded={} city_loaded={}",
+            asset_server.is_loaded_with_dependencies(quadcopter_scene.id()),
+            asset_server.is_loaded_with_dependencies(city_scene.id())
+        );
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn sim_gltf_world_assets_clone_with_registered_types() {
+        let scene_assets = prepare_scene_assets();
+        let mut app = build_scene_asset_test_app(true);
+        let (quadcopter_scene, city_scene) = load_scene_asset_handles(&mut app, &scene_assets);
+        assert!(
+            wait_for_scene_asset_loads(&mut app, &quadcopter_scene, &city_scene),
+            "scene assets did not load"
+        );
+
+        let registry = app
+            .world()
+            .resource::<bevy::ecs::reflect::AppTypeRegistry>()
+            .clone();
+        let world_assets = app.world().resource::<Assets<WorldAsset>>();
+        for (name, handle) in [("quadcopter", &quadcopter_scene), ("city", &city_scene)] {
+            let world_asset = world_assets
+                .get(handle)
+                .unwrap_or_else(|| panic!("{name} world asset did not load"));
+            world_asset
+                .clone_with(&registry)
+                .unwrap_or_else(|err| panic!("{name} world asset cannot spawn: {err}"));
+        }
     }
 
     #[test]
