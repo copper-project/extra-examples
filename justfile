@@ -3,7 +3,6 @@ default: pr-check
 pr-check:
 	just fmt-check
 	just check
-	just test
 
 fmt:
 	cargo fmt --all
@@ -24,8 +23,8 @@ check-embedded:
 	cargo check -p cu-elrs-bdshot-demo --target thumbv8m.main-none-eabihf
 	cargo check -p cu-flight-controller --target thumbv7em-none-eabihf --no-default-features --features firmware,textlogs --bin quad
 
-# Host-side tests only. The embedded demo is compile-checked separately and the
-# balancebot resim/logreader paths pull in local-only or Python-linked flows.
+# Local host-side tests only. These are intentionally not part of pr-check or CI
+# because some host examples download large assets/models at test time.
 test:
 	cargo test -p cu-human-pose
 	cargo test -p cu-flight-controller --bin quad-sim --features textlogs

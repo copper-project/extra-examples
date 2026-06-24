@@ -8,10 +8,10 @@
 ## Testing
 - [ ] `just fmt-check`
 - [ ] `just check`
-- [ ] `just test`
+- [ ] `just test` (local-only host tests, as needed)
 - [ ] Other (please specify):
 
-pro-tip: `just` with no parameters in the root defaults to `just fmt-check`, `just check`, and `just test`.
+pro-tip: `just` with no parameters in the root defaults to `just fmt-check` and `just check`.
 
 ## Checklist
 - [ ] I have updated docs or examples where needed

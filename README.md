@@ -42,14 +42,17 @@ workflow via GitHub's `workflow_dispatch` API.
 just pr-check
 ```
 
-`just pr-check` runs formatting verification, the existing host/embedded compile
-smoke checks, and the host-side unit tests that are stable in CI.
+`just pr-check` runs formatting verification and the existing host/embedded
+compile smoke checks.
 
 `just check` remains available when you only want the compile-smoke pass. The
 host checks cover the Linux-targeted apps. `cu-human-pose` needs GStreamer
 development packages installed locally. The embedded smoke checks use cross-target
 `cargo check` against the same RP2350 and STM32H7 targets exercised by these
 demos.
+
+Host-side tests are local-only and run on demand with `just test`; they are not
+part of CI because some examples download large assets or models at test time.
 
 ## License
 

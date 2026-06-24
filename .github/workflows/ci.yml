@@ -53,12 +53,6 @@ jobs:
           cargo check -p cu-feetech-demo --all-targets
           cargo check -p cu-gnss-ublox-demo --all-targets --features logexport
 
-      - name: Run host tests
-        run: |
-          cargo test -p cu-human-pose
-          cargo test -p cu-flight-controller --bin quad-sim --features textlogs
-          cargo test -p cu-rp-balancebot --bin balancebot-sim
-
   embedded:
     name: Embedded Example Checks
     runs-on: ubuntu-latest
