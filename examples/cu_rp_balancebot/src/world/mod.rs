@@ -26,11 +26,20 @@ use cu_bevymon::{CuBevyMonFocus, CuBevyMonSurface};
 #[cfg(not(target_arch = "wasm32"))]
 use std::path::{Path, PathBuf};
 #[cfg(not(target_arch = "wasm32"))]
-use std::{fs, io};
+use std::{
+    fs,
+    io::{self, Write},
+};
 
 pub const BALANCEBOT: &str = "balancebot.glb";
 pub const SKYBOX: &str = "skybox.ktx2";
 pub const DIFFUSE_MAP: &str = "diffuse_map.ktx2";
+#[cfg(not(target_arch = "wasm32"))]
+const BASE_ASSETS_URL: &str = "https://cdn.copper-robotics.com/";
+#[cfg(not(target_arch = "wasm32"))]
+const SCENE_ASSETS: [&str; 3] = [BALANCEBOT, SKYBOX, DIFFUSE_MAP];
+#[cfg(not(target_arch = "wasm32"))]
+const SCENE_ASSET_CACHE_DIR: &str = ".download-cache";
 
 const TABLE_HEIGHT: f32 = 0.724;
 const RAIL_WIDTH: f32 = 0.55; // 55cm
@@ -101,6 +110,13 @@ pub struct AppliedForce(pub Vector);
 #[derive(Resource, Clone, Copy)]
 struct WorldLayout {
     split_monitor: bool,
+}
+
+#[derive(Resource, Clone)]
+struct SceneAssetPaths {
+    balance_bot: String,
+    skybox: String,
+    diffuse_map: String,
 }
 
 #[derive(SystemParam)]
@@ -201,6 +217,7 @@ pub fn build_world(app: &mut App, headless: bool, split_monitor: bool) -> &mut A
         .init_resource::<SceneLoadState>()
         .insert_resource(Gravity::default())
         .insert_resource(Time::<Physics>::default())
+        .insert_resource(prepare_scene_assets())
         .add_systems(Startup, setup_scene)
         .add_systems(Startup, setup_ui)
         .add_systems(Update, setup_entities) // Wait for the cart entity to be loaded
@@ -292,49 +309,82 @@ fn ground_setup(
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-fn create_symlink(src: &str, dst: &str) -> io::Result<()> {
-    let dst_path = Path::new(dst);
+fn scene_asset_root() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("assets")
+}
 
-    if dst_path.exists() {
-        fs::remove_file(dst_path)?;
+#[cfg(not(target_arch = "wasm32"))]
+fn scene_asset_cache_root() -> PathBuf {
+    scene_asset_root().join(SCENE_ASSET_CACHE_DIR)
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn path_string(path: &Path) -> String {
+    path.to_string_lossy().into_owned()
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn asset_progress_bar(done: usize, total: usize) -> String {
+    const WIDTH: usize = 28;
+    let filled = WIDTH * done / total.max(1);
+    let empty = WIDTH.saturating_sub(filled);
+    format!(
+        "[{}{}] {done}/{total}",
+        "=".repeat(filled),
+        " ".repeat(empty)
+    )
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn link_or_copy_cached_asset(src: &Path, dst: &Path) -> io::Result<()> {
+    if fs::symlink_metadata(dst).is_ok() {
+        fs::remove_file(dst)?;
     }
 
     #[cfg(unix)]
     {
-        std::os::unix::fs::symlink(src, dst)
+        match std::os::unix::fs::symlink(src, dst) {
+            Ok(()) => Ok(()),
+            Err(symlink_err) => fs::copy(src, dst).map(|_| ()).map_err(|copy_err| {
+                io::Error::new(
+                    copy_err.kind(),
+                    format!("failed to symlink ({symlink_err}) or copy ({copy_err})"),
+                )
+            }),
+        }
     }
 
     #[cfg(windows)]
     {
-        std::os::windows::fs::symlink_file(src, dst)
+        match std::os::windows::fs::symlink_file(src, dst) {
+            Ok(()) => Ok(()),
+            Err(symlink_err) => fs::copy(src, dst).map(|_| ()).map_err(|copy_err| {
+                io::Error::new(
+                    copy_err.kind(),
+                    format!("failed to symlink ({symlink_err}) or copy ({copy_err})"),
+                )
+            }),
+        }
     }
 }
 
-/// Tries to get the asset path using the online cache first.
-/// If that fails due to a network error, falls back to the offline cache.
 #[cfg(not(target_arch = "wasm32"))]
 fn get_asset_path(
     online_cache: &Cache,
     offline_cache: &Cache,
     asset_url: &str,
-    asset_name: &str, // For logging purposes
+    asset_name: &str,
 ) -> Result<PathBuf, CacheError> {
-    match online_cache.cached_path(asset_url) {
+    match offline_cache.cached_path(asset_url) {
         Ok(path) => Ok(path),
         Err(err) => {
-            // Check if the error is network-related
             if matches!(
                 err,
-                CacheError::HttpError(_) | CacheError::IoError(_) | CacheError::ResourceNotFound(_)
+                CacheError::NoCachedVersions(_) | CacheError::CacheCorrupted(_)
             ) {
-                warn!(
-                    "Failed to fetch latest '{}' from network ({}). Attempting to use cached version.",
-                    asset_name, err
-                );
-                // Fallback to offline cache
-                offline_cache.cached_path(asset_url)
+                eprintln!("  {asset_name}: cache miss; downloading from {asset_url}");
+                online_cache.cached_path(asset_url)
             } else {
-                // Not a network error, propagate the original error
                 Err(err)
             }
         }
@@ -342,7 +392,94 @@ fn get_asset_path(
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-pub const BASE_ASSETS_URL: &str = "https://cdn.copper-robotics.com/";
+fn precached_asset_path(
+    online_cache: &Cache,
+    offline_cache: &Cache,
+    asset_root: &Path,
+    index: usize,
+    total: usize,
+    asset_name: &str,
+) -> Result<String, CacheError> {
+    let plain_path = asset_root.join(asset_name);
+    if plain_path.is_file() {
+        eprintln!(
+            "  {} {asset_name}: cached",
+            asset_progress_bar(index, total)
+        );
+        return Ok(path_string(&plain_path));
+    }
+
+    if fs::symlink_metadata(&plain_path).is_ok() {
+        fs::remove_file(&plain_path)?;
+    }
+
+    eprintln!(
+        "  {} {asset_name}: resolving",
+        asset_progress_bar(index.saturating_sub(1), total)
+    );
+    let asset_url = format!("{BASE_ASSETS_URL}{asset_name}");
+    let hashed_path = get_asset_path(online_cache, offline_cache, &asset_url, asset_name)?;
+    link_or_copy_cached_asset(&hashed_path, &plain_path)?;
+    eprintln!("  {} {asset_name}: ready", asset_progress_bar(index, total));
+    Ok(path_string(&plain_path))
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn prepare_scene_assets() -> SceneAssetPaths {
+    let asset_root = scene_asset_root();
+    let cache_root = scene_asset_cache_root();
+    fs::create_dir_all(&asset_root).expect("failed to create scene asset directory");
+
+    eprintln!(
+        "Preparing Copper balancebot scene assets in {}",
+        asset_root.display()
+    );
+    let _ = io::stderr().flush();
+
+    let online_cache = Cache::builder()
+        .dir(cache_root.clone())
+        .progress_bar(Some(ProgressBar::Full))
+        .build()
+        .expect("failed to create online scene asset cache");
+    let offline_cache = Cache::builder()
+        .dir(cache_root)
+        .offline(true)
+        .progress_bar(None)
+        .build()
+        .expect("failed to create offline scene asset cache");
+
+    let total = SCENE_ASSETS.len();
+    let mut paths = Vec::with_capacity(total);
+    for (i, asset_name) in SCENE_ASSETS.iter().enumerate() {
+        paths.push(
+            precached_asset_path(
+                &online_cache,
+                &offline_cache,
+                &asset_root,
+                i + 1,
+                total,
+                asset_name,
+            )
+            .unwrap_or_else(|err| panic!("failed to prepare {asset_name}: {err}")),
+        );
+    }
+
+    eprintln!("Scene assets ready.");
+    SceneAssetPaths {
+        balance_bot: paths[0].clone(),
+        skybox: paths[1].clone(),
+        diffuse_map: paths[2].clone(),
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+fn prepare_scene_assets() -> SceneAssetPaths {
+    SceneAssetPaths {
+        balance_bot: BALANCEBOT.to_string(),
+        skybox: SKYBOX.to_string(),
+        diffuse_map: DIFFUSE_MAP.to_string(),
+    }
+}
 
 fn setup_scene(
     mut commands: Commands,
@@ -351,83 +488,12 @@ fn setup_scene(
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
     layout: Res<WorldLayout>,
+    asset_paths: Res<SceneAssetPaths>,
 ) {
-    #[cfg(not(target_arch = "wasm32"))]
-    let online_cache = Cache::builder()
-        .progress_bar(Some(ProgressBar::Full))
-        .build()
-        .expect("Failed to create the online file cache.");
-
-    #[cfg(not(target_arch = "wasm32"))]
-    let offline_cache = Cache::builder()
-        .progress_bar(Some(ProgressBar::Full))
-        .offline(true)
-        .build()
-        .expect("Failed to create the offline file cache.");
-
-    #[cfg(not(target_arch = "wasm32"))]
-    let balance_bot_url = format!("{BASE_ASSETS_URL}{BALANCEBOT}");
-
-    #[cfg(not(target_arch = "wasm32"))]
-    let balance_bot_hashed =
-        get_asset_path(&online_cache, &offline_cache, &balance_bot_url, BALANCEBOT)
-            .expect("Failed to get balancebot.glb (online or cached).");
-
-    #[cfg(not(target_arch = "wasm32"))]
-    let balance_bot_path = balance_bot_hashed.parent().unwrap().join(BALANCEBOT);
-
-    #[cfg(not(target_arch = "wasm32"))]
-    create_symlink(
-        balance_bot_hashed.to_str().unwrap(),
-        balance_bot_path.to_str().unwrap(),
-    )
-    .expect("Failed to create symlink to balancebot.glb.");
-
-    #[cfg(not(target_arch = "wasm32"))]
-    let skybox_url = format!("{BASE_ASSETS_URL}{SKYBOX}");
-
-    #[cfg(not(target_arch = "wasm32"))]
-    let skybox_path_hashed = get_asset_path(&online_cache, &offline_cache, &skybox_url, SKYBOX)
-        .expect("Failed to get skybox.ktx2 (online or cached).");
-
-    #[cfg(not(target_arch = "wasm32"))]
-    let skybox_path = skybox_path_hashed.parent().unwrap().join(SKYBOX);
-
-    #[cfg(not(target_arch = "wasm32"))]
-    create_symlink(
-        skybox_path_hashed.to_str().unwrap(),
-        skybox_path.to_str().unwrap(),
-    )
-    .expect("Failed to create symlink to skybox.ktx2.");
-
-    #[cfg(not(target_arch = "wasm32"))]
-    let diffuse_map_url = format!("{BASE_ASSETS_URL}{DIFFUSE_MAP}");
-
-    #[cfg(not(target_arch = "wasm32"))]
-    let diffuse_map_path_hashed =
-        get_asset_path(&online_cache, &offline_cache, &diffuse_map_url, DIFFUSE_MAP)
-            .expect("Failed to get diffuse_map.ktx2 (online or cached).");
-
-    #[cfg(not(target_arch = "wasm32"))]
-    let diffuse_map_path = diffuse_map_path_hashed.parent().unwrap().join(DIFFUSE_MAP);
-
-    #[cfg(not(target_arch = "wasm32"))]
-    create_symlink(
-        diffuse_map_path_hashed.to_str().unwrap(),
-        diffuse_map_path.to_str().unwrap(),
-    )
-    .expect("Failed to create symlink to diffuse_map.ktx2.");
-
-    #[cfg(target_arch = "wasm32")]
-    let balance_bot_path = BALANCEBOT;
-    #[cfg(target_arch = "wasm32")]
-    let skybox_path = SKYBOX;
-    #[cfg(target_arch = "wasm32")]
-    let diffuse_map_path = DIFFUSE_MAP;
-
-    let scene_handle = asset_server.load(GltfAssetLabel::Scene(0).from_asset(balance_bot_path));
-    let skybox_handle = asset_server.load(skybox_path);
-    let diffuse_map_handle = asset_server.load(diffuse_map_path);
+    let scene_handle =
+        asset_server.load(GltfAssetLabel::Scene(0).from_asset(asset_paths.balance_bot.clone()));
+    let skybox_handle = asset_server.load(asset_paths.skybox.clone());
+    let diffuse_map_handle = asset_server.load(asset_paths.diffuse_map.clone());
     let specular_map_handle = skybox_handle.clone();
 
     commands.insert_resource(GlobalAmbientLight {

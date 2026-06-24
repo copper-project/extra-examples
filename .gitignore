@@ -4,3 +4,4 @@
 **/logs/*.copper
 **/logs/*.log
 **/copper-crash-**.txt
+**/.download-cache
