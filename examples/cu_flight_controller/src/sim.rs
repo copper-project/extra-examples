@@ -29,12 +29,12 @@ use bevy::image::TextureFormatPixelInfo;
 use bevy::prelude::{
     App, AssetPlugin, AssetServer, Assets, ButtonInput, Camera, Camera3d, Color, Commands,
     Component, ComputedNode, DefaultPlugins, Dir3, DirectionalLight, Entity, EnvironmentMapLight,
-    FixedUpdate, GlobalAmbientLight, GlobalTransform, GltfAssetLabel, Handle, Image, ImageNode,
-    IsDefaultUiCamera, KeyCode, MessageReader, MessageWriter, MinimalPlugins, Name, Node,
-    PerspectiveProjection, Pickable, PluginGroup, PositionType, PostUpdate, Projection, Quat,
-    Query, Res, ResMut, Resource, Scene, SceneRoot, Startup, Text, TextColor, TextFont,
-    TextureAtlasLayout, Time, Transform, UVec2, UiRect, Update, Val, Vec2, Vec3, Visibility,
-    Window, WindowPlugin, With, Without, default,
+    FixedUpdate, FontSize, GlobalAmbientLight, GlobalTransform, GltfAssetLabel, Handle, Image,
+    ImageNode, IsDefaultUiCamera, KeyCode, MessageReader, MessageWriter, MinimalPlugins, Name,
+    Node, PerspectiveProjection, Pickable, PluginGroup, PositionType, PostUpdate, Projection, Quat,
+    Query, Res, ResMut, Resource, Startup, Text, TextColor, TextFont, TextureAtlasLayout, Time,
+    Transform, UVec2, UiRect, Update, Val, Vec2, Vec3, Visibility, Window, WindowPlugin, With,
+    Without, WorldAsset, WorldAssetRoot, default,
 };
 use bevy::render::render_resource::{TextureDimension, TextureFormat, TextureUsages};
 #[cfg(not(target_arch = "wasm32"))]
@@ -136,8 +136,8 @@ struct SimKinematics {
 
 #[derive(Resource)]
 struct PendingQuadcopterSpawn {
-    quadcopter_scene: Handle<Scene>,
-    city_scene: Handle<Scene>,
+    quadcopter_scene: Handle<WorldAsset>,
+    city_scene: Handle<WorldAsset>,
 }
 
 #[derive(Resource, Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -785,7 +785,7 @@ fn setup_world(
             ..default()
         }),
         Skybox {
-            image: skybox_handle.clone(),
+            image: Some(skybox_handle.clone()),
             brightness: 1000.0,
             ..default()
         },
@@ -815,7 +815,7 @@ fn setup_world(
         Name::new("sun"),
         DirectionalLight {
             illuminance: 12_000.0,
-            shadows_enabled: true,
+            shadow_maps_enabled: true,
             ..default()
         },
         Transform::from_translation(Vec3::new(3.0, 10.0, 1.0)).looking_at(Vec3::ZERO, Vec3::Y),
@@ -840,7 +840,7 @@ fn setup_world(
 
     commands.spawn((
         Name::new("city"),
-        SceneRoot(city_scene),
+        WorldAssetRoot(city_scene),
         Transform {
             translation: city_translation,
             scale: city_scale,
@@ -873,7 +873,7 @@ fn spawn_quadcopter_when_world_ready(
     commands
         .spawn((
             Name::new("quadcopter"),
-            SceneRoot(pending_spawn.quadcopter_scene.clone()),
+            WorldAssetRoot(pending_spawn.quadcopter_scene.clone()),
             RigidBody::Dynamic,
             transform,
             position,
@@ -1054,7 +1054,7 @@ fn spawn_loading_overlay(
                             Pickable::IGNORE,
                             Text::new("Assets loading..."),
                             TextFont {
-                                font_size: 18.0,
+                                font_size: FontSize::Px(18.0),
                                 ..default()
                             },
                             TextColor(Color::srgb(0.93, 0.96, 1.0)),
@@ -1107,7 +1107,7 @@ fn spawn_help_overlay(
                     Pickable::IGNORE,
                     Text::new("View\nRC Link\nArm\nMode\nThrottle\nRoll/Pitch\nYaw\nReset"),
                     TextFont {
-                        font_size: 12.0,
+                        font_size: FontSize::Px(12.0),
                         ..default()
                     },
                     TextColor(Color::srgb(0.78, 0.86, 0.96)),
@@ -1118,7 +1118,7 @@ fn spawn_help_overlay(
                     SimHelpValuesText,
                     Text::new("FPV (V)\nChecking RC link..."),
                     TextFont {
-                        font_size: 12.0,
+                        font_size: FontSize::Px(12.0),
                         ..default()
                     },
                     TextColor(Color::WHITE),
@@ -1929,11 +1929,11 @@ fn update_osd_overlay(
     let Some(osd_canvas_assets) = osd_canvas_assets else {
         return;
     };
-    let Some(canvas_image) = images.get_mut(&osd_canvas_assets.canvas) else {
+    let Some(mut canvas_image) = images.get_mut(&osd_canvas_assets.canvas) else {
         return;
     };
 
-    rasterize_osd_canvas(&osd_overlay, &raster_source, canvas_image);
+    rasterize_osd_canvas(&osd_overlay, &raster_source, &mut canvas_image);
 }
 
 fn stop_copper_on_exit(mut exit_events: MessageReader<AppExit>, mut copper: ResMut<CopperState>) {
@@ -1960,7 +1960,7 @@ fn register_scene_reflect_types(app: &mut App) {
     app.register_type::<bevy::prelude::Handle<bevy::prelude::StandardMaterial>>();
     app.register_type::<bevy::prelude::Handle<bevy::prelude::Image>>();
     app.register_type::<bevy::prelude::Handle<bevy::prelude::Gltf>>();
-    app.register_type::<bevy::prelude::Handle<bevy::prelude::Scene>>();
+    app.register_type::<bevy::prelude::Handle<bevy::prelude::WorldAsset>>();
     app.register_type::<bevy::gltf::GltfExtras>();
     app.register_type::<bevy::gltf::GltfSceneExtras>();
     app.register_type::<bevy::gltf::GltfMeshExtras>();

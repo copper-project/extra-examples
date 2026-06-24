@@ -244,7 +244,7 @@ pub fn build_world(app: &mut App, headless: bool, split_monitor: bool) -> &mut A
     app.register_type::<Handle<StandardMaterial>>();
     app.register_type::<Handle<Image>>();
     app.register_type::<Handle<Gltf>>();
-    app.register_type::<Handle<Scene>>();
+    app.register_type::<Handle<WorldAsset>>();
     app.register_type::<bevy::gltf::GltfExtras>();
     app.register_type::<bevy::gltf::GltfSceneExtras>();
     app.register_type::<bevy::gltf::GltfMeshExtras>();
@@ -436,7 +436,7 @@ fn setup_scene(
         affects_lightmapped_meshes: true,
     });
 
-    commands.spawn((SceneRoot(scene_handle),));
+    commands.spawn((WorldAssetRoot(scene_handle),));
 
     let split_target = if layout.split_monitor {
         let mut image = Image::new_uninit(
@@ -479,18 +479,19 @@ fn setup_scene(
     }
 
     camera.insert(Skybox {
-        image: skybox_handle,
+        image: Some(skybox_handle),
         brightness: 1000.0,
         ..default()
     });
     #[cfg(not(target_arch = "wasm32"))]
     camera.insert(ScreenSpaceReflections {
-        perceptual_roughness_threshold: 0.85,
+        max_perceptual_roughness: 0.80..0.85,
         thickness: 0.01,
         linear_steps: 128,
         linear_march_exponent: 2.0,
         bisection_steps: 8,
         use_secant: true,
+        ..default()
     });
     camera.insert(Fxaa::default());
 
@@ -545,7 +546,7 @@ fn setup_ui(mut commands: Commands, layout: Res<WorldLayout>) {
                         Pickable::IGNORE,
                         Text::new("Assets loading..."),
                         TextFont {
-                            font_size: 18.0,
+                            font_size: FontSize::Px(18.0),
                             ..default()
                         },
                         TextColor(Color::srgb(0.93, 0.96, 1.0)),
@@ -576,7 +577,7 @@ fn setup_ui(mut commands: Commands, layout: Res<WorldLayout>) {
             parent.spawn((
                 Text::new("Move\nNavigation\nInteract\nZoom\nPause/Resume\nReset\nShow Forces"),
                 TextFont {
-                    font_size: 12.0,
+                    font_size: FontSize::Px(12.0),
                     ..default()
                 },
                 TextColor(Color::srgba(0.25, 0.25, 0.75, 1.0)), // Golden color
@@ -586,7 +587,7 @@ fn setup_ui(mut commands: Commands, layout: Res<WorldLayout>) {
             parent.spawn((
                 Text::new(instructions),
                 TextFont {
-                    font_size: 12.0,
+                    font_size: FontSize::Px(12.0),
                     ..default()
                 },
                 TextColor(Color::WHITE),
@@ -758,7 +759,7 @@ fn setup_entities(
     // Light
     commands.spawn((
         PointLight {
-            shadows_enabled: true,
+            shadow_maps_enabled: true,
             ..default()
         },
         Transform::from_xyz(2.0, 4.0, 2.0),
